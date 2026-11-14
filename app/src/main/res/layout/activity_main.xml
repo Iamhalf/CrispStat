@@ -114,7 +114,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="In WhatsApp, choose "My status" as the recipient."
+            android:text="In WhatsApp, choose &quot;My status&quot; as the recipient."
             android:textSize="13sp" />
     </LinearLayout>
 </ScrollView>

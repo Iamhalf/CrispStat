@@ -39,6 +39,19 @@ jobs:
           tag_name: build-${{ github.run_number }}
           name: CrispStat build ${{ github.run_number }}
           body: |
-            Download **CrispStat.apk** below and tap it to install or update.
+            ## CrispStat: keep your WhatsApp Status sharp
+
+            **How to install:** tap **CrispStat.apk** under *Assets* below, then open the downloaded file. Already installed? Installing this one updates it, and your settings stay.
+
+            **What it does**
+            - Resizes videos to **720p or 1080p** at a clean quality that suits WhatsApp Status
+            - Splits long videos into **30s or 60s parts**, in order
+            - Resizes large photos with high quality
+            - **Share to WhatsApp** in one tap → choose *My status*
+            - **Save to Gallery** (Movies/CrispStat, Pictures/CrispStat)
+
+            Requires Android 8.0 or newer. Not affiliated with WhatsApp or Meta.
+
+            Changes in this build: ${{ github.event.head_commit.message }}
           files: CrispStat.apk
           make_latest: true

@@ -1,7 +1,13 @@
 package com.crispstat.app;
 
 import android.content.ActivityNotFoundException;
+import android.Manifest;
 import android.content.ClipData;
+import android.content.ContentValues;
+import android.content.pm.PackageManager;
+import android.media.MediaScannerConnection;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -25,6 +31,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.OptIn;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MimeTypes;
@@ -67,6 +74,7 @@ public class MainActivity extends AppCompatActivity {
 
     private Button pickButton;
     private Button shareButton;
+    private Button saveButton;
     private ProgressBar progressBar;
     private TextView statusText;
     private RadioGroup partLength;
@@ -77,6 +85,8 @@ public class MainActivity extends AppCompatActivity {
     private final ExecutorService background = Executors.newSingleThreadExecutor();
 
     private final ArrayList<Uri> outputUris = new ArrayList<>();
+    private final ArrayList<File> outputFiles = new ArrayList<>();
+    private ActivityResultLauncher<String> storagePermission;
     private String outputMime = "video/mp4";
 
     // Video job state
@@ -98,6 +108,7 @@ public class MainActivity extends AppCompatActivity {
 
         pickButton = findViewById(R.id.pickButton);
         shareButton = findViewById(R.id.shareButton);
+        saveButton = findViewById(R.id.saveButton);
         progressBar = findViewById(R.id.progress);
         statusText = findViewById(R.id.statusText);
         partLength = findViewById(R.id.partLength);
@@ -113,6 +124,21 @@ public class MainActivity extends AppCompatActivity {
                         .build()));
 
         shareButton.setOnClickListener(v -> shareToWhatsApp());
+
+        storagePermission = registerForActivityResult(
+                new ActivityResultContracts.RequestPermission(),
+                granted -> {
+                    if (granted) saveToGallery();
+                    else Toast.makeText(this, "Storage permission needed to save", Toast.LENGTH_SHORT).show();
+                });
+        saveButton.setOnClickListener(v -> {
+            if (Build.VERSION.SDK_INT < 29 && ContextCompat.checkSelfPermission(this,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+            } else {
+                saveToGallery();
+            }
+        });
 
         // Opened via "Share" from the Gallery
         Intent intent = getIntent();
@@ -134,7 +160,9 @@ public class MainActivity extends AppCompatActivity {
 
     private void clearOutputs() {
         outputUris.clear();
+        outputFiles.clear();
         shareButton.setEnabled(false);
+        saveButton.setEnabled(false);
         File dir = outDir();
         File[] old = dir.listFiles();
         if (old != null) for (File f : old) //noinspection ResultOfMethodCallIgnored
@@ -177,7 +205,9 @@ public class MainActivity extends AppCompatActivity {
                     setBusy(false);
                     outputMime = "image/jpeg";
                     outputUris.add(shareUri);
+                    outputFiles.add(out);
                     shareButton.setEnabled(true);
+                    saveButton.setEnabled(true);
                     statusText.setText("Photo ready (" + w + "×" + h + ", "
                             + humanSize(out.length()) + "). Tap Share to WhatsApp.");
                 });
@@ -292,6 +322,7 @@ public class MainActivity extends AppCompatActivity {
         if (currentPart >= totalParts) {
             setBusy(false);
             shareButton.setEnabled(true);
+            saveButton.setEnabled(true);
             statusText.setText(totalParts == 1
                     ? "Video ready (" + humanSize(totalOutputSize()) + "). Tap Share to WhatsApp."
                     : totalParts + " parts ready (" + humanSize(totalOutputSize())
@@ -333,6 +364,7 @@ public class MainActivity extends AppCompatActivity {
                                             @NonNull ExportResult result) {
                         handler.removeCallbacks(progressPoller);
                         outputUris.add(toShareUri(out));
+                        outputFiles.add(out);
                         currentPart++;
                         exportNextPart();
                     }
@@ -399,6 +431,85 @@ public class MainActivity extends AppCompatActivity {
         send.setPackage(null);
         Toast.makeText(this, "WhatsApp not found — pick an app", Toast.LENGTH_SHORT).show();
         startActivity(Intent.createChooser(send, "Share to"));
+    }
+
+    // ------------------------------------------------------------------
+    // Save to Gallery
+    // ------------------------------------------------------------------
+
+    private void saveToGallery() {
+        if (outputFiles.isEmpty()) return;
+        saveButton.setEnabled(false);
+        final ArrayList<File> files = new ArrayList<>(outputFiles);
+        background.execute(() -> {
+            int saved = 0;
+            String error = null;
+            long stamp = System.currentTimeMillis();
+            for (int i = 0; i < files.size(); i++) {
+                File f = files.get(i);
+                boolean isVideo = f.getName().endsWith(".mp4");
+                String name = "CrispStat_" + stamp + (files.size() > 1 ? "_part" + (i + 1) : "")
+                        + (isVideo ? ".mp4" : ".jpg");
+                try {
+                    copyToGallery(f, name, isVideo);
+                    saved++;
+                } catch (Exception e) {
+                    error = e.getMessage();
+                }
+            }
+            final int count = saved;
+            final String err = error;
+            handler.post(() -> {
+                saveButton.setEnabled(true);
+                if (err == null) {
+                    Toast.makeText(this, "Saved " + count + " file(s) to Gallery → CrispStat",
+                            Toast.LENGTH_LONG).show();
+                } else {
+                    Toast.makeText(this, "Couldn't save: " + err, Toast.LENGTH_LONG).show();
+                }
+            });
+        });
+    }
+
+    private void copyToGallery(File src, String name, boolean isVideo) throws Exception {
+        if (Build.VERSION.SDK_INT >= 29) {
+            ContentValues v = new ContentValues();
+            v.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+            v.put(MediaStore.MediaColumns.MIME_TYPE, isVideo ? "video/mp4" : "image/jpeg");
+            v.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                    (isVideo ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_PICTURES) + "/CrispStat");
+            v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+            Uri collection = isVideo
+                    ? MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    : MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+            Uri item = getContentResolver().insert(collection, v);
+            if (item == null) throw new Exception("Gallery refused the file");
+            try (InputStream in = new java.io.FileInputStream(src);
+                 OutputStream os = getContentResolver().openOutputStream(item)) {
+                if (os == null) throw new Exception("Couldn't open Gallery file");
+                copy(in, os);
+            }
+            v.clear();
+            v.put(MediaStore.MediaColumns.IS_PENDING, 0);
+            getContentResolver().update(item, v, null, null);
+        } else {
+            File dir = new File(Environment.getExternalStoragePublicDirectory(
+                    isVideo ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_PICTURES), "CrispStat");
+            //noinspection ResultOfMethodCallIgnored
+            dir.mkdirs();
+            File dest = new File(dir, name);
+            try (InputStream in = new java.io.FileInputStream(src);
+                 OutputStream os = new FileOutputStream(dest)) {
+                copy(in, os);
+            }
+            MediaScannerConnection.scanFile(this, new String[]{dest.getAbsolutePath()}, null, null);
+        }
+    }
+
+    private static void copy(InputStream in, OutputStream out) throws java.io.IOException {
+        byte[] buf = new byte[64 * 1024];
+        int n;
+        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
     }
 
     // ------------------------------------------------------------------
